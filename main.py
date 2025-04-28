@@ -3,6 +3,8 @@ import numpy as np
 from math import sqrt
 from PIL import Image
 
+import imageio
+
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
 from matplotlib.animation import FuncAnimation
@@ -15,16 +17,19 @@ ti.init(arch=ti.opengl)  # or ti.gpu
 # subdive 4 ver 2562 face 5120 edge 7680 second_edge 3810
 # subdive 5 ver 10242 face 20480 edge 30720 second_edge 15330
 # subdive 6 ver 40962 face 81920 edge 122880 second_edge 245730
+# subdive 7 ver 163842 face 327680 edge 491520 second_edge 983010
 
 
 # 模拟参数
-subdiv = 5
-n_points = 10242  # subdivision=2 的 icosphere 顶点数
-n_edges = 30720 # 对应的边数
-n_second_edges = 15330 # 对应的边数
-n_faces = 20480  # 对应的三角形面数
+subdiv = 4
+n_points = 2562 # subdivision=2 的 icosphere 顶点数
+n_edges = 7680 # 对应的边数
+n_second_edges = 3810 # 对应的边数
+n_faces = 5120  # 对应的三角形面数
+max_neighbor = 12
+
 dt = 0.01
-k_spring = 10.0
+k_spring = 50.0
 damping = 0.05
 mass = 0.5
 gravity = ti.Vector([0.0, -0.0, 0.0])
@@ -41,6 +46,10 @@ SIGMOID_CONTRAST = 8.0
 wave0 = ti.field(dtype=ti.f32, shape=3)
 wave1 = ti.field(dtype=ti.f32, shape=3)
 
+# for camera movement
+angle = 0.0
+camera_radius = 8.0
+
 # 数据结构
 x = ti.Vector.field(3, dtype=ti.f32, shape=n_points)  # 位置
 v = ti.Vector.field(3, dtype=ti.f32, shape=n_points)  # 速度
@@ -53,6 +62,7 @@ face_indexs = ti.Vector.field(3, dtype=ti.i32, shape=n_faces)  # 每个点所属
 face_indexs_for_render = ti.field(dtype=ti.i32, shape=n_faces * 3)  # 每个点所属的面
 colors = ti.Vector.field(3, dtype=ti.f32, shape=n_points)
 rds = ti.Vector.field(3, dtype=ti.f32, shape=6)
+ti_neighbor_map = ti.field(dtype=ti.i32, shape=(n_points, max_neighbor))
 
 # Texture
 image = Image.open("texture.jpg").convert("RGB")
@@ -76,10 +86,31 @@ mesh_normal = ti.Vector.field(3, dtype=ti.f32, shape=n_points)
 
 
 
-@ti.kernel
-def init_speed():
-    v[0] = ti.Vector([0.0, 5.5, 0.0])
-    v[50] = ti.Vector([0.0, -5.5, 0.0])
+def init_speed(edges):
+    from collections import defaultdict
+    force = 20.0
+    tmp_v = np.zeros((n_points, 3) , dtype=float)
+    tmp_v[0] = ti.Vector([0.0, force, 0.0])
+    tmp_v[500] = ti.Vector([0.0, force, 0.0])
+    tmp_v[2000] = ti.Vector([0.0, force, 0.0])
+
+    neighbor_map = defaultdict(set)
+
+    for e in edges:
+        a, b = e
+        neighbor_map[a].add(b)
+        neighbor_map[b].add(a)
+    for i in neighbor_map[0]:
+        tmp_v[i] = ti.Vector([0.0, 0.8 * force, 0.0])
+
+    for i in neighbor_map[500]:
+        tmp_v[i] = ti.Vector([0.0, 0.8 * force, 0.0])
+    
+    for i in neighbor_map[2000]:
+        tmp_v[i] = ti.Vector([0.0, 0.8 * force, 0.0])
+    
+    v.from_numpy(tmp_v)
+
 
 # secondary spring
 
@@ -97,9 +128,14 @@ def compute_volume_maintain_force():
         # print("v", v)
         # print("tmp_v", tmp_v)
     volume[0] = tmp_v
-    volume_force[0] = (origin_volume[0] - volume[0]) / origin_volume[0] * 10000
+    volume_force[0] = (origin_volume[0] - volume[0]) / origin_volume[0] * 1000
     print("volume_force", volume_force[0])
 # normal direction
+
+@ti.kernel
+def close_to_neighbor_average():
+    print("hello")
+
 
 @ti.kernel
 def compute_forces():
@@ -128,7 +164,7 @@ def compute_forces():
         i, j = second_edges[e][0], second_edges[e][1]
         dir = x[j] - x[i]
         dist = dir.norm()
-        force = (k_spring * 1 * (dist/second_rest[e] - 1) + damping * ti.math.dot(v[j] - v[i], dir)) * dir.normalized()
+        force = (k_spring * 2 * (dist/second_rest[e] - 1) + damping * ti.math.dot(v[j] - v[i], dir)) * dir.normalized()
         f[i] += force
         f[j] -= force
     
@@ -216,7 +252,6 @@ def fancy_cube(n):
         coly = ti_texture[int(0.5 + THICKNESS_SCAL*n[2]/n[1]), int(0.5 + THICKNESS_SCAL*n[0]/n[1])]
     if n[2] != 0.0:
         colz = ti_texture[int(0.5 + THICKNESS_SCAL*n[0]/n[2]), int(0.5 + THICKNESS_SCAL*n[1]/n[2])]
-    print("inside fancy_cube")
 
     t = n * n
     sam = (colx * t[0] + coly * t[1] + colz * t[2])/(t[0] + t[1] + t[2])
@@ -297,6 +332,13 @@ def resample_color(rds, refl0, refl1, wave0, wave1):
     intensity1 = filmic_gamma_inverse(cube1) + refl1
     col = resample(wave0, wave1, intensity0, intensity1)
     return 1.4 * filmic_gamma(col / 6.0)
+
+# @ti.func
+# def resample_color(rds, refl0, refl1, wave0, wave1):
+#     intensity0 = refl0
+#     intensity1 = refl1
+#     col = resample(wave0, wave1, intensity0, intensity1)
+#     return 1.4 * filmic_gamma(col / 6.0)
 
 
 
@@ -404,7 +446,7 @@ def test():
 
 test()
 
-init_speed()
+init_speed(edges_np)
 
 # mesh_normal.from_numpy(np.array(mesh.vertex_normals[:n_points]))
 # print("origin mesh_normal", mesh_normal[0])
@@ -427,23 +469,41 @@ mesh_normal.from_numpy(np.array(mesh.vertex_normals[:n_points]))
 # update_color(ti.Vector([5, 5, 5]))
 # print("color outside", colors[0])
 
+frames = []
+frame_count = 0
+total_frames = 60 * 30
+
+# while frame_count < total_frames:
 while window.running:
+    angle += 0.01
+    cam_x = camera_radius * ti.math.cos(angle)
+    cam_y = 0.0
+    cam_z = camera_radius * ti.math.sin(angle)
     compute_volume_maintain_force()
     compute_forces()
     integrate()
-    update_color(ti.Vector([5, 5, 5]))
+    mesh.vertices[:] = x.to_numpy()
+    mesh_normal.from_numpy(np.array(mesh.vertex_normals[:n_points]))
+
+
+
+    update_color(ti.Vector([cam_x, cam_y, cam_z]))
     # print(colors[0])
 
     scene.ambient_light((0.8, 0.8, 0.8))
-    scene.point_light(pos=(5, 5, 5), color=(1.0, 1.0, 1.0))
-    camera.position(5, 5, 5)
+    scene.point_light(pos=(cam_x, cam_y, cam_z), color=(1.0, 1.0, 1.0))
+    camera.position(cam_x, cam_y, cam_z)
     camera.lookat(0, 0, 0)
     scene.set_camera(camera)
     scene.mesh(x, indices=face_indexs_for_render, per_vertex_color=colors)
     canvas.scene(scene)
     window.show()
-    mesh.vertices[:] = x.to_numpy()
-    mesh_normal.from_numpy(np.array(mesh.vertex_normals[:n_points]))
+    # img = window.get_image_buffer_as_numpy()
+    # img = (img * 255).astype(np.uint8)
+    # frames.append(img)
+    # frame_count += 1
+
+    # print("frame_count", frame_count)
     # print("mesh_normal", mesh_normal[0])
 
-
+# imageio.mimsave('bubble.mp4', frames, fps=60)
