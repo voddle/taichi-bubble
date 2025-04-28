@@ -66,6 +66,7 @@ face_indexs_for_render = ti.field(dtype=ti.i32, shape=n_faces * 3)  # 每个点�
 colors = ti.Vector.field(3, dtype=ti.f32, shape=n_points)
 rds = ti.Vector.field(3, dtype=ti.f32, shape=6)
 ti_neighbor_map = ti.field(dtype=ti.i32, shape=(n_points, max_neighbor))
+rds_batch = np.zeros((1024 * 1024, 6, 3), dtype=np.float32)
 
 # Texture
 image = Image.open("texture.jpg").convert("RGB")
@@ -605,8 +606,8 @@ def fancy_cube_batch(n):
 
     return output  # (N, 3)
 
-def fresnel(rd, norm, n2):
-    r0 = np.power((1.0 - n2) / (1.0 + n2), np.array(2.0, 2.0, 2.0))
+def fresnel_batch(rd, norm, n2):
+    r0 = np.power((1.0 - n2) / (1.0 + n2), np.array([2.0, 2.0, 2.0]))
     return r0 + (1.0 - r0) * np.power(np.clip(1.0 - np.sum(rd * norm, axis=1), 0.0, 1.0), 5.0)
 
 def texture_3d_load_batch(view_dirs):
@@ -683,7 +684,7 @@ def texCubeSampleWeights_batch(i):
     w = np.array([(1.0 - i) * (1.0 - i), 2.8 * i * (1.0 - i), i * i])
     return w / np.sum(w)
 
-def simpleampleCubeMap_batch(w, rrd):
+def simplesampleCubeMap_batch(w, rrd):
     # 使用批处理版本的texture_3d_load函数
     t = texture_3d_load_batch(rrd)  # 形状(N, 3)
     
@@ -718,6 +719,98 @@ def sampleCubeMap_batch(wave, rds0, rds1, rds2):
     
     # 合并结果
     return np.column_stack([result0, result1, result2])  # 形状(N, 3)
+
+def filmic_gamma_batch(x):
+    return np.log(GAMMA_CURVE * x + 1.0) / GAMMA_SCALE
+
+def filmic_gamma_inverse_batch(y):
+    return (1.0 / GAMMA_CURVE) * (np.exp(GAMMA_SCALE * y) - 1.0)
+
+def refract_batch(incident, normal, eta):
+    incident = np.asarray(incident, dtype=np.float32)  # (N,3)
+    normal   = np.asarray(normal,   dtype=np.float32)  # (N,3)
+
+    # -------- 1. 规范化 eta --------
+    eta = np.asarray(eta, dtype=np.float32)
+
+    if eta.ndim == 0:                # 标量
+        eta = np.broadcast_to(eta, (incident.shape[0], 3))
+    elif eta.shape == (3,):          # (3,) -> 扩成 (N,3)
+        eta = np.broadcast_to(eta, (incident.shape[0], 3))
+    elif eta.shape == incident.shape:  # (N,3) OK
+        pass
+    else:
+        raise ValueError("eta 的形状必须是标量、(3,) 或 (N,3)")
+
+    # -------- 2. 计算公共量 --------
+    # cos_i : (N,1)  每条光线的 I·N
+    cos_i = np.sum(incident * normal, axis=1, keepdims=True)
+
+    # k : (N,3)   判别式
+    k = 1.0 - eta**2 * (1.0 - cos_i**2)
+
+    # -------- 3. 按波长算折射 --------
+    # 先把 incident / normal 扩到 (N,1,3) 再广播
+    I = incident[:, None, :]          # (N,1,3)
+    N = normal[:,  None, :]           # (N,1,3)
+    η = eta[:,    :,   None]          # (N,3,1)  每波长一个标量
+    cos_i = cos_i[:, None, :]         # (N,1,1)  方便广播
+    k_pos = k > 0                     # (N,3)    能折射的布尔掩码
+
+    # 折射公式：T = ηI - (η cos_i + sqrt(k)) N
+    sqrt_k = np.sqrt(np.clip(k, 0.0, None))[:, :, None]   # (N,3,1)
+    T = η * I - (η * cos_i + sqrt_k) * N                  # (N,3,3)
+
+    # -------- 4. 处理全反射 --------
+    T[~k_pos] = 0.0   # 或者返回 NaN / 保留原向量，视需求而定
+    print("T", T.shape)
+
+    return T
+
+def sample_weights_batch(i):
+    i = np.asarray(i, dtype=np.float32)  # 确保是 NumPy 数组
+    w0 = (1.0 - i)**2
+    w1 = 2.8 * i * (1.0 - i)
+    w2 = i**2
+    return np.stack([w0, w1, w2], axis=-1)  # (..., 3)
+
+def resample_batch(wl0, wl1, i0, i1):
+    wl0 = np.asarray(wl0, dtype=np.float32)
+    wl1 = np.asarray(wl1, dtype=np.float32)
+    i0  = np.asarray(i0,  dtype=np.float32)
+    i1  = np.asarray(i1,  dtype=np.float32)
+
+    # 采样六组 sample weights
+    w0 = sample_weights_batch(wl0[..., 0])  # wl0.x
+    w1 = sample_weights_batch(wl0[..., 1])  # wl0.y
+    w2 = sample_weights_batch(wl0[..., 2])  # wl0.z
+    w3 = sample_weights_batch(wl1[..., 0])  # wl1.x
+    w4 = sample_weights_batch(wl1[..., 1])  # wl1.y
+    w5 = sample_weights_batch(wl1[..., 2])  # wl1.z
+
+    # 加权求和
+    out = (i0[..., 0, None] * w0 +
+           i0[..., 1, None] * w1 +
+           i0[..., 2, None] * w2 +
+           i1[..., 0, None] * w3 +
+           i1[..., 1, None] * w4 +
+           i1[..., 2, None] * w5)
+
+    return out  # (..., 3)
+
+
+def resample_color_batch(rds_batch, refl0, refl1, wave0, wave1):
+    cube0 = sampleCubeMap_batch(wave0, rds_batch[:, 0], rds_batch[:, 1], rds_batch[:, 2])
+    cube1 = sampleCubeMap_batch(wave1, rds_batch[:, 3], rds_batch[:, 4], rds_batch[:, 5])
+    intensity0 = filmic_gamma_inverse_batch(cube0) + refl0
+    intensity1 = filmic_gamma_inverse_batch(cube1) + refl1
+    col = resample_batch(wave0, wave1, intensity0, intensity1)
+    return 1.4 * filmic_gamma_batch(col / 6.0)
+
+def contrast_batch(x):
+    x = np.asarray(x, dtype=np.float32)
+    return 1.0 / (1.0 + np.exp(-SIGMOID_CONTRAST * (x - 0.5)))
+
 
 
 def render(hit_locations, hit_index_ray, hit_index_tri):
@@ -757,12 +850,28 @@ def render(hit_locations, hit_index_ray, hit_index_tri):
     rior0 = 1.0 / iors0
     rior1 = 1.0 / iors1
 
-    f0 = (1.0 - FRESNEL_RATIO) + FRESNEL_RATIO * fresnel(ray_direction[hit_index_ray], bary_normals, iors0)
-    f1 = (1.0 - FRESNEL_RATIO) + FRESNEL_RATIO * fresnel(ray_direction[hit_index_ray], bary_normals, iors1)
+    f0 = (1.0 - FRESNEL_RATIO) + FRESNEL_RATIO * fresnel_batch(ray_direction[hit_index_ray], bary_normals, rior0)
+    f1 = (1.0 - FRESNEL_RATIO) + FRESNEL_RATIO * fresnel_batch(ray_direction[hit_index_ray], bary_normals, rior1)
 
     rrd = ray_direction[hit_index_ray] - 2.0 * dot_products * bary_normals
 
-    cube0 = REFLECTANCE_GAMMA_SCALE * att0 * texture_3d_load_batch(rrd)
+    cube0 = REFLECTANCE_GAMMA_SCALE * att0 * simplesampleCubeMap_batch(wave0, rrd)
+    cube1 = REFLECTANCE_GAMMA_SCALE * att1 * simplesampleCubeMap_batch(wave1, rrd)
+
+    refl0 = REFLECTANCE_SCALE * filmic_gamma_inverse_batch(ti.math.mix(ti.Vector([0.0, 0.0, 0.0]), cube0, f0))
+    refl1 = REFLECTANCE_SCALE * filmic_gamma_inverse_batch(ti.math.mix(ti.Vector([0.0, 0.0, 0.0]), cube1, f1))
+
+    rds_batch[:, 0] = refract_batch(ray_direction[hit_index_ray], bary_normals, iors0[0])
+    rds_batch[:, 1] = refract_batch(ray_direction[hit_index_ray], bary_normals, iors0[1])
+    rds_batch[:, 2] = refract_batch(ray_direction[hit_index_ray], bary_normals, iors0[2])
+    rds_batch[:, 3] = refract_batch(ray_direction[hit_index_ray], bary_normals, iors1[0])
+    rds_batch[:, 4] = refract_batch(ray_direction[hit_index_ray], bary_normals, iors1[1])
+    rds_batch[:, 5] = refract_batch(ray_direction[hit_index_ray], bary_normals, iors1[2])
+
+    col = resample_color_batch(rds_batch, refl0, refl1, wave0, wave1)
+    col = contrast_batch(col)
+    print("col", col.shape)
+
 
     # for i in range(len(hit_locations)):
     #     n = mesh_normal[i].normalized()
