@@ -11,7 +11,8 @@ from mpl_toolkits.mplot3d import Axes3D
 from matplotlib.animation import FuncAnimation
 
 # ti.init(arch=ti.cpu)  # or ti.gpu
-ti.init(arch=ti.opengl)  # or ti.gpu
+# ti.init(arch=ti.opengl)  # or ti.gpu
+ti.init(arch=ti.cuda)  # or ti.gpu
 
 
 # subdive 3 ver 642 face 1280 edge 1920 second_edge 930
@@ -448,6 +449,31 @@ def test():
     dist = dir.norm()
     dir = dir / dist
 
+@ti.kernel
+def bary():
+
+    print("hello")
+
+def compute_barycentric(v0, v1, v2, p):
+    # v0, v1, v2: 顶点坐标
+    # p: hit点坐标
+    v0v1 = v1 - v0
+    v0v2 = v2 - v0
+    v0p = p - v0
+
+    d00 = np.dot(v0v1, v0v1)
+    d01 = np.dot(v0v1, v0v2)
+    d11 = np.dot(v0v2, v0v2)
+    d20 = np.dot(v0p, v0v1)
+    d21 = np.dot(v0p, v0v2)
+
+    denom = d00 * d11 - d01 * d01
+    v = (d11 * d20 - d01 * d21) / denom
+    w = (d00 * d21 - d01 * d20) / denom
+    u = 1.0 - v - w
+
+    return u, v, w
+
 test()
 
 init_speed(edges_np)
@@ -495,6 +521,60 @@ locations, index_ray, index_tri = mesh.ray.intersects_location(ray_origin, ray_d
 print(locations.shape)
 print(index_ray.shape)
 print(index_tri.shape)
+
+
+def compute_barycentric_batch(v0s, v1s, v2s, ps):
+    v0v1 = v1s - v0s
+    v0v2 = v2s - v0s
+    v0p = ps - v0s
+
+    d00 = np.sum(v0v1 * v0v1, axis=1)
+    d01 = np.sum(v0v1 * v0v2, axis=1)
+    d11 = np.sum(v0v2 * v0v2, axis=1)
+    d20 = np.sum(v0p * v0v1, axis=1)
+    d21 = np.sum(v0p * v0v2, axis=1)
+
+    denom = d00 * d11 - d01 * d01
+    v = (d11 * d20 - d01 * d21) / denom
+    w = (d00 * d21 - d01 * d20) / denom
+    u = 1.0 - v - w
+
+    return u, v, w
+
+
+def render(hit_locations, hit_index_ray, hit_index_tri):
+
+    face_indices = mesh.faces[hit_index_tri]  # (N, 3)，每行是一个三角形的3个顶点索引
+
+    v0s = mesh.vertices[face_indices[:, 0]]  # (N, 3)，取每个face的第一个点
+    v1s = mesh.vertices[face_indices[:, 1]]  # (N, 3)
+    v2s = mesh.vertices[face_indices[:, 2]]  # (N, 3)
+    print("v0s.shape", v0s.shape)
+    print("v1s.shape", v1s.shape)
+    print("v2s.shape", v2s.shape)
+
+    n0s = mesh.vertex_normals[face_indices[:, 0]]  # 对应的normal
+    n1s = mesh.vertex_normals[face_indices[:, 1]]
+    n2s = mesh.vertex_normals[face_indices[:, 2]]
+
+
+
+    u, v, w = compute_barycentric_batch(v0s, v1s, v2s, hit_locations)
+    bary_normals = u[:, None] * n0s + v[:, None] * n1s + w[:, None] * n2s
+    print(bary_normals.shape)
+
+    # for i in range(len(hit_locations)):
+    #     hit_tri = mesh.faces[hit_index_tri[i]]
+    #     u, v, w = compute_barycentric(mesh.vertices[hit_tri[0]], mesh.vertices[hit_tri[1]], mesh.vertices[hit_tri[2]], hit_locations[i])
+    #     n = (u * mesh.vertex_normals[hit_tri[0]] + v * mesh.vertex_normals[hit_tri[1]] + w * mesh.vertex_normals[hit_tri[2]])
+    #     hit_normal = n / np.linalg.norm(n)
+
+
+
+render(locations, index_ray, index_tri)
+
+
+
 
 
 

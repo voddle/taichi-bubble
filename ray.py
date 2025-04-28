@@ -1,4 +1,5 @@
 import numpy as np
+import taichi as ti
 
 def generate_camera_rays(camera_pos, camera_lookat, width, height, fov_y=45.0):
     camera_pos = np.array(camera_pos)
@@ -40,3 +41,6 @@ def generate_camera_rays(camera_pos, camera_lookat, width, height, fov_y=45.0):
     ray_directions = dirs.reshape(-1, 3)
 
     return ray_origins, ray_directions
+
+
+
