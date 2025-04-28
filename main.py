@@ -63,6 +63,7 @@ face_indexs_for_render = ti.field(dtype=ti.i32, shape=n_faces * 3)  # 每个点�
 colors = ti.Vector.field(3, dtype=ti.f32, shape=n_points)
 rds = ti.Vector.field(3, dtype=ti.f32, shape=6)
 ti_neighbor_map = ti.field(dtype=ti.i32, shape=(n_points, max_neighbor))
+origin_point = ti.Vector.field(3, dtype=ti.f32, shape=1)
 
 # Texture
 image = Image.open("texture.jpg").convert("RGB")
@@ -128,7 +129,7 @@ def compute_volume_maintain_force():
         # print("v", v)
         # print("tmp_v", tmp_v)
     volume[0] = tmp_v
-    volume_force[0] = (origin_volume[0] - volume[0]) / origin_volume[0] * 1000
+    volume_force[0] = (origin_volume[0] - volume[0]) / origin_volume[0] * 10000
     print("volume_force", volume_force[0])
 # normal direction
 
@@ -176,10 +177,13 @@ def compute_forces():
 @ti.kernel
 def integrate():
     print(f[0])
+    origin_point[0] = ti.Vector([0.0, 0.0, 0.0])
     for i in range(n_points):
         a = f[i] / mass + gravity
         v[i] += dt * a
         x[i] += dt * v[i]
+        origin_point[0] += x[i]
+    origin_point[0] /= n_points
     
 def create_icosphere(subdiv=subdiv):
     import trimesh
@@ -491,9 +495,9 @@ while window.running:
     # print(colors[0])
 
     scene.ambient_light((0.8, 0.8, 0.8))
-    scene.point_light(pos=(cam_x, cam_y, cam_z), color=(1.0, 1.0, 1.0))
-    camera.position(cam_x, cam_y, cam_z)
-    camera.lookat(0, 0, 0)
+    camera.lookat(origin_point[0][0], origin_point[0][1], origin_point[0][2])
+    camera.position(cam_x + origin_point[0][0], cam_y + origin_point[0][1], cam_z + origin_point[0][2])
+    scene.point_light(pos=(cam_x + origin_point[0][0], cam_y + origin_point[0][1], cam_z + origin_point[0][2]), color=(1.0, 1.0, 1.0))
     scene.set_camera(camera)
     scene.mesh(x, indices=face_indexs_for_render, per_vertex_color=colors)
     canvas.scene(scene)
