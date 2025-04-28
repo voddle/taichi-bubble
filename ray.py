@@ -43,4 +43,3 @@ def generate_camera_rays(camera_pos, camera_lookat, width, height, fov_y=45.0):
     return ray_origins, ray_directions
 
 
-

@@ -74,7 +74,7 @@ ti_texture = ti.Vector.field(3, dtype=ti.f32, shape=(image_np.shape[1], image_np
 ti_texture.from_numpy(np.transpose(image_np, (1, 0, 2)))
 
 image = Image.open("bw.jpg").convert("RGB")
-image_np = np.array(image).astype(np.float32) / 255.0
+image_np_bw = np.array(image).astype(np.float32) / 255.0
 ti_texture_bw = ti.Vector.field(3, dtype=ti.f32, shape=(image_np.shape[1], image_np.shape[0]))
 ti_texture_bw.from_numpy(np.transpose(image_np, (1, 0, 2)))
 
@@ -262,6 +262,7 @@ def fancy_cube(n):
     sam = (colx * t[0] + coly * t[1] + colz * t[2])/(t[0] + t[1] + t[2])
 
     return sam
+
 
 @ti.func
 def filmic_gamma(i):
@@ -541,33 +542,279 @@ def compute_barycentric_batch(v0s, v1s, v2s, ps):
 
     return u, v, w
 
+def fancy_cube_batch(n):
+    N = n.shape[0]
+
+    colx = ti.Vector([0.0, 0.0, 0.0])
+    coly = ti.Vector([0.0, 0.0, 0.0])
+    colz = ti.Vector([0.0, 0.0, 0.0])
+
+    n0 = n[:, 0]
+    n1 = n[:, 1]
+    n2 = n[:, 2]
+
+    t = n * n  # (N, 3)
+
+    eps = 1e-6
+
+    # Prepare uv for each channel
+    # colx: (n[1]/n[0], n[2]/n[0])
+    mask_x = np.abs(n0) > eps
+    uvx_0 = 0.5 + THICKNESS_SCAL * (n1 / (n0 + (~mask_x) * eps))
+    uvx_1 = 0.5 + THICKNESS_SCAL * (n2 / (n0 + (~mask_x) * eps))
+
+    # coly: (n[2]/n[1], n[0]/n[1])
+    mask_y = np.abs(n1) > eps
+    uvy_0 = 0.5 + THICKNESS_SCAL * (n2 / (n1 + (~mask_y) * eps))
+    uvy_1 = 0.5 + THICKNESS_SCAL * (n0 / (n1 + (~mask_y) * eps))
+
+    # colz: (n[0]/n[2], n[1]/n[2])
+    mask_z = np.abs(n2) > eps
+    uvz_0 = 0.5 + THICKNESS_SCAL * (n0 / (n2 + (~mask_z) * eps))
+    uvz_1 = 0.5 + THICKNESS_SCAL * (n1 / (n2 + (~mask_z) * eps))
+
+    H, W, _ = image_np.shape
+
+    # Clip UV到合法区间，防止越界
+    uvx_0 = np.clip((uvx_0 * (W-1)).astype(np.int32), 0, W-1)
+    uvx_1 = np.clip((uvx_1 * (H-1)).astype(np.int32), 0, H-1)
+
+    uvy_0 = np.clip((uvy_0 * (W-1)).astype(np.int32), 0, W-1)
+    uvy_1 = np.clip((uvy_1 * (H-1)).astype(np.int32), 0, H-1)
+
+    uvz_0 = np.clip((uvz_0 * (W-1)).astype(np.int32), 0, W-1)
+    uvz_1 = np.clip((uvz_1 * (H-1)).astype(np.int32), 0, H-1)
+
+    # Sample color
+    colx = np.zeros((N, 3), dtype=np.float32)
+    coly = np.zeros((N, 3), dtype=np.float32)
+    colz = np.zeros((N, 3), dtype=np.float32)
+
+    colx[mask_x] = image_np[uvx_1[mask_x], uvx_0[mask_x]]
+    coly[mask_y] = image_np[uvy_1[mask_y], uvy_0[mask_y]]
+    colz[mask_z] = image_np[uvz_1[mask_z], uvz_0[mask_z]]
+
+    # Weighted sum
+    numerator = colx * t[:, 0:1] + coly * t[:, 1:2] + colz * t[:, 2:3]
+    denominator = (t[:, 0:1] + t[:, 1:2] + t[:, 2:3]) + eps
+    print("numerator", numerator.shape)
+    print("denominator", denominator.shape)
+
+    output = numerator / denominator
+    print("output", output.shape)
+
+    return output  # (N, 3)
+
+def fresnel(rd, norm, n2):
+    r0 = np.power((1.0 - n2) / (1.0 + n2), np.array(2.0, 2.0, 2.0))
+    return r0 + (1.0 - r0) * np.power(np.clip(1.0 - np.sum(rd * norm, axis=1), 0.0, 1.0), 5.0)
+
+def texture_3d_load_batch(view_dirs):
+    N = view_dirs.shape[0]
+    abs_d = np.abs(view_dirs)
+    
+    # 初始化UV坐标数组
+    uvs = np.zeros((N, 2), dtype=np.float32)
+    
+    # 创建三种情况的掩码
+    mask_x_major = (abs_d[:, 0] > abs_d[:, 1]) & (abs_d[:, 0] > abs_d[:, 2])
+    mask_y_major = (abs_d[:, 1] > abs_d[:, 2]) & ~mask_x_major
+    mask_z_major = ~mask_x_major & ~mask_y_major
+    
+    # X轴主导情况
+    x_pos = view_dirs[:, 0] > 0
+    x_pos_mask = mask_x_major & x_pos
+    x_neg_mask = mask_x_major & ~x_pos
+    
+    # X正向
+    if np.any(x_pos_mask):
+        uvs[x_pos_mask, 0] = 0.5 - 0.5 * view_dirs[x_pos_mask, 2] / abs_d[x_pos_mask, 0]  # -z/x
+        uvs[x_pos_mask, 1] = 0.5 - 0.5 * view_dirs[x_pos_mask, 1] / abs_d[x_pos_mask, 0]  # -y/x
+    
+    # X负向
+    if np.any(x_neg_mask):
+        uvs[x_neg_mask, 0] = 0.5 + 0.5 * view_dirs[x_neg_mask, 2] / abs_d[x_neg_mask, 0]  # z/x
+        uvs[x_neg_mask, 1] = 0.5 - 0.5 * view_dirs[x_neg_mask, 1] / abs_d[x_neg_mask, 0]  # -y/x
+    
+    # Y轴主导情况
+    y_pos = view_dirs[:, 1] > 0
+    y_pos_mask = mask_y_major & y_pos
+    y_neg_mask = mask_y_major & ~y_pos
+    
+    # Y正向
+    if np.any(y_pos_mask):
+        uvs[y_pos_mask, 0] = 0.5 - 0.5 * view_dirs[y_pos_mask, 0] / abs_d[y_pos_mask, 1]  # -x/y
+        uvs[y_pos_mask, 1] = 0.5 + 0.5 * view_dirs[y_pos_mask, 2] / abs_d[y_pos_mask, 1]  # z/y
+    
+    # Y负向
+    if np.any(y_neg_mask):
+        uvs[y_neg_mask, 0] = 0.5 + 0.5 * view_dirs[y_neg_mask, 0] / abs_d[y_neg_mask, 1]  # x/y
+        uvs[y_neg_mask, 1] = 0.5 - 0.5 * view_dirs[y_neg_mask, 2] / abs_d[y_neg_mask, 1]  # -z/y
+    
+    # Z轴主导情况
+    z_pos = view_dirs[:, 2] > 0
+    z_pos_mask = mask_z_major & z_pos
+    z_neg_mask = mask_z_major & ~z_pos
+    
+    # Z正向
+    if np.any(z_pos_mask):
+        uvs[z_pos_mask, 0] = 0.5 + 0.5 * view_dirs[z_pos_mask, 0] / abs_d[z_pos_mask, 2]  # x/z
+        uvs[z_pos_mask, 1] = 0.5 - 0.5 * view_dirs[z_pos_mask, 1] / abs_d[z_pos_mask, 2]  # -y/z
+    
+    # Z负向
+    if np.any(z_neg_mask):
+        uvs[z_neg_mask, 0] = 0.5 - 0.5 * view_dirs[z_neg_mask, 0] / abs_d[z_neg_mask, 2]  # -x/z
+        uvs[z_neg_mask, 1] = 0.5 - 0.5 * view_dirs[z_neg_mask, 1] / abs_d[z_neg_mask, 2]  # -y/z
+    
+    # 转换UV坐标到图像索引
+    H, W, _ = image_np_bw.shape
+    u_indices = np.clip((uvs[:, 0] * (W - 1)).astype(np.int32), 0, W - 1)
+    v_indices = np.clip((uvs[:, 1] * (H - 1)).astype(np.int32), 0, H - 1)
+    
+    # 采样颜色
+    colors = image_np_bw[v_indices, u_indices]
+    
+    return colors
+
+def sampleWeights_batch(i):
+    return np.array([(1.0 - i) * (1.0 - i), 2.8 * i * (1.0 - i), i * i])
+
+def texCubeSampleWeights_batch(i):
+    w = np.array([(1.0 - i) * (1.0 - i), 2.8 * i * (1.0 - i), i * i])
+    return w / np.sum(w)
+
+def simpleampleCubeMap_batch(w, rrd):
+    # 使用批处理版本的texture_3d_load函数
+    t = texture_3d_load_batch(rrd)  # 形状(N, 3)
+    
+    # 对每个采样结果应用权重
+    weights0 = texCubeSampleWeights_batch(w[0])  # 形状(3,)
+    weights1 = texCubeSampleWeights_batch(w[1])  # 形状(3,)
+    weights2 = texCubeSampleWeights_batch(w[2])  # 形状(3,)
+    
+    # 计算加权结果，使用einsum进行批量点积运算
+    result0 = np.einsum('i,ni->n', weights0, t)  # 形状(N,)
+    result1 = np.einsum('i,ni->n', weights1, t)  # 形状(N,)
+    result2 = np.einsum('i,ni->n', weights2, t)  # 形状(N,)
+    
+    # 合并结果
+    return np.column_stack([result0, result1, result2])  # 形状(N, 3)
+
+def sampleCubeMap_batch(wave, rds0, rds1, rds2):
+    # 分别对三个方向采样
+    col0 = texture_3d_load_batch(rds0)  # 形状(N, 3)
+    col1 = texture_3d_load_batch(rds1)  # 形状(N, 3)
+    col2 = texture_3d_load_batch(rds2)  # 形状(N, 3)
+    
+    # 计算权重
+    weights0 = texCubeSampleWeights_batch(wave[0])  # 形状(3,)
+    weights1 = texCubeSampleWeights_batch(wave[1])  # 形状(3,)
+    weights2 = texCubeSampleWeights_batch(wave[2])  # 形状(3,)
+    
+    # 计算加权结果
+    result0 = np.einsum('i,ni->n', weights0, col0)  # 形状(N,)
+    result1 = np.einsum('i,ni->n', weights1, col1)  # 形状(N,)
+    result2 = np.einsum('i,ni->n', weights2, col2)  # 形状(N,)
+    
+    # 合并结果
+    return np.column_stack([result0, result1, result2])  # 形状(N, 3)
+
 
 def render(hit_locations, hit_index_ray, hit_index_tri):
+    wave0 = np.array([1.0, 0.8, 0.6])
+    wave1 = np.array([0.4, 0.2, 0.0])
+
+    iors0 = IOR + wave0 * DISPERSION
+    iors1 = IOR + wave1 * DISPERSION
+
 
     face_indices = mesh.faces[hit_index_tri]  # (N, 3)，每行是一个三角形的3个顶点索引
 
     v0s = mesh.vertices[face_indices[:, 0]]  # (N, 3)，取每个face的第一个点
     v1s = mesh.vertices[face_indices[:, 1]]  # (N, 3)
     v2s = mesh.vertices[face_indices[:, 2]]  # (N, 3)
-    print("v0s.shape", v0s.shape)
-    print("v1s.shape", v1s.shape)
-    print("v2s.shape", v2s.shape)
 
     n0s = mesh.vertex_normals[face_indices[:, 0]]  # 对应的normal
     n1s = mesh.vertex_normals[face_indices[:, 1]]
     n2s = mesh.vertex_normals[face_indices[:, 2]]
 
-
-
     u, v, w = compute_barycentric_batch(v0s, v1s, v2s, hit_locations)
+
+    # here got all barycentric normals
     bary_normals = u[:, None] * n0s + v[:, None] * n1s + w[:, None] * n2s
-    print(bary_normals.shape)
+
+    sam = fancy_cube_batch(bary_normals)
+    filmThickness = sam[:, 0] + 0.1
+    filmThickness = filmThickness[:, np.newaxis]
+    print("filmThickness", filmThickness.shape)
+
+    dot_products = np.sum(bary_normals * ray_direction[hit_index_ray], axis=1)
+    dot_products = dot_products[:, np.newaxis]
+
+    att0 = 0.5 + 0.5 * np.cos(((THICKNESS_SCAL * filmThickness) / (wave0 + 1.0)) * dot_products)
+    att1 = 0.5 + 0.5 * np.cos(((THICKNESS_SCAL * filmThickness) / (wave1 + 1.0)) * dot_products)
+
+    rior0 = 1.0 / iors0
+    rior1 = 1.0 / iors1
+
+    f0 = (1.0 - FRESNEL_RATIO) + FRESNEL_RATIO * fresnel(ray_direction[hit_index_ray], bary_normals, iors0)
+    f1 = (1.0 - FRESNEL_RATIO) + FRESNEL_RATIO * fresnel(ray_direction[hit_index_ray], bary_normals, iors1)
+
+    rrd = ray_direction[hit_index_ray] - 2.0 * dot_products * bary_normals
+
+    cube0 = REFLECTANCE_GAMMA_SCALE * att0 * texture_3d_load_batch(rrd)
 
     # for i in range(len(hit_locations)):
-    #     hit_tri = mesh.faces[hit_index_tri[i]]
-    #     u, v, w = compute_barycentric(mesh.vertices[hit_tri[0]], mesh.vertices[hit_tri[1]], mesh.vertices[hit_tri[2]], hit_locations[i])
-    #     n = (u * mesh.vertex_normals[hit_tri[0]] + v * mesh.vertex_normals[hit_tri[1]] + w * mesh.vertex_normals[hit_tri[2]])
-    #     hit_normal = n / np.linalg.norm(n)
+    #     n = mesh_normal[i].normalized()
+    #     view_dir = (camera_pos - x[i]).normalized()
+
+    #     sam = fancy_cube(n)
+    #     filmThickness = sam[0] + 0.1
+
+    #     att0 = 0.5 + 0.5 * ti.math.cos(((THICKNESS_SCAL * filmThickness) / (wave0 + 1.0)) * ti.math.dot(n, view_dir))
+    #     att1 = 0.5 + 0.5 * ti.math.cos(((THICKNESS_SCAL * filmThickness) / (wave1 + 1.0)) * ti.math.dot(n, view_dir))
+    #     # print("break 3")
+    #     rior0 = 1.0 / iors0
+    #     rior1 = 1.0 / iors1
+    #     t0 = ti.math.pow((1.0 - rior0)/(1.0 + rior0), ti.Vector([2.0, 2.0, 2.0]))
+    #     t1 = ti.math.pow((1.0 - rior1)/(1.0 + rior1), ti.Vector([2.0, 2.0, 2.0]))
+    #     tt = ti.math.pow(ti.math.clamp(1.0 + ti.math.dot(n, view_dir), 0.0, 1.0), 5.0)
+    #     f0 = (1.0 - FRESNEL_RATIO) + FRESNEL_RATIO * (t0 + (1.0 - t0) * tt)
+    #     f1 = (1.0 - FRESNEL_RATIO) + FRESNEL_RATIO * (t1 + (1.0 - t1) * tt)
+
+    #     rrd = view_dir - 2.0 * ti.math.dot(n, view_dir) * n
+
+    #     # print("break 4")
+    #     cube0 = REFLECTANCE_GAMMA_SCALE * att0 * simpleampleCubeMap(wave0, rrd)
+    #     cube1 = REFLECTANCE_GAMMA_SCALE * att1 * simpleampleCubeMap(wave1, rrd)
+
+    #     refl0 = REFLECTANCE_SCALE * filmic_gamma_inverse(ti.math.mix(ti.Vector([0.0, 0.0, 0.0]), cube0, f0))
+    #     refl1 = REFLECTANCE_SCALE * filmic_gamma_inverse(ti.math.mix(ti.Vector([0.0, 0.0, 0.0]), cube1, f1))
+    #     # print("break 5")
+
+    #     rds[0] = ti.math.refract(view_dir, n, iors0[0])
+    #     rds[1] = ti.math.refract(view_dir, n, iors0[1])
+    #     rds[2] = ti.math.refract(view_dir, n, iors0[2])
+    #     rds[3] = ti.math.refract(view_dir, n, iors1[0])
+    #     rds[4] = ti.math.refract(view_dir, n, iors1[1])
+    #     rds[5] = ti.math.refract(view_dir, n, iors1[2])
+
+    #     col = resample_color(rds, refl0, refl1, wave0, wave1)
+    #     col = contrast(col)
+
+        # cos_theta = ti.math.dot(n, view_dir)
+        # fresnel = ti.pow(1.0 - cos_theta, 5.0)
+        # wave = ti.sin(50 * cos_theta) * 0.5 + 0.5
+
+        # r = 0.5 * fresnel + 0.5 * wave
+        # g = 0.3 * fresnel + 0.7 * wave
+        # b = 1.0 * (1.0 - fresnel) * wave
+
+        # r = 1.0 / (1.0 - ti.math.exp( -0.8 * (r - 0.5)))
+        # g = 1.0 / (1.0 - ti.math.exp( -0.8 * (g - 0.5)))
+        # b = 1.0 / (1.0 - ti.math.exp( -0.8 * (b - 0.5)))
+
+        # colors[i] = col
 
 
 
