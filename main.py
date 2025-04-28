@@ -66,7 +66,6 @@ face_indexs_for_render = ti.field(dtype=ti.i32, shape=n_faces * 3)  # 每个点�
 colors = ti.Vector.field(3, dtype=ti.f32, shape=n_points)
 rds = ti.Vector.field(3, dtype=ti.f32, shape=6)
 ti_neighbor_map = ti.field(dtype=ti.i32, shape=(n_points, max_neighbor))
-rds_batch = np.zeros((1024 * 1024, 6, 3), dtype=np.float32)
 
 # Texture
 image = Image.open("texture.jpg").convert("RGB")
@@ -608,7 +607,11 @@ def fancy_cube_batch(n):
 
 def fresnel_batch(rd, norm, n2):
     r0 = np.power((1.0 - n2) / (1.0 + n2), np.array([2.0, 2.0, 2.0]))
-    return r0 + (1.0 - r0) * np.power(np.clip(1.0 - np.sum(rd * norm, axis=1), 0.0, 1.0), 5.0)
+    r0 = np.broadcast_to(r0, (rd.shape[0], 3))
+    cos_i = np.sum(rd * norm, axis=1)  # (N,)
+    cos_i = np.clip(1.0 + cos_i, 0.0, 1.0)  # 注意这里是 1.0 + cosθ
+    cos_i = cos_i[:, np.newaxis]  # (N,1)，方便广播
+    return r0 + (1.0 - r0) * np.power(cos_i, 5.0)
 
 def texture_3d_load_batch(view_dirs):
     N = view_dirs.shape[0]
@@ -765,7 +768,7 @@ def refract_batch(incident, normal, eta):
     T[~k_pos] = 0.0   # 或者返回 NaN / 保留原向量，视需求而定
     print("T", T.shape)
 
-    return T
+    return T[:, 0, :]
 
 def sample_weights_batch(i):
     i = np.asarray(i, dtype=np.float32)  # 确保是 NumPy 数组
@@ -811,6 +814,8 @@ def contrast_batch(x):
     x = np.asarray(x, dtype=np.float32)
     return 1.0 / (1.0 + np.exp(-SIGMOID_CONTRAST * (x - 0.5)))
 
+def mix(a, b, t):
+    return a * (1.0 - t) + b * t
 
 
 def render(hit_locations, hit_index_ray, hit_index_tri):
@@ -858,9 +863,14 @@ def render(hit_locations, hit_index_ray, hit_index_tri):
     cube0 = REFLECTANCE_GAMMA_SCALE * att0 * simplesampleCubeMap_batch(wave0, rrd)
     cube1 = REFLECTANCE_GAMMA_SCALE * att1 * simplesampleCubeMap_batch(wave1, rrd)
 
-    refl0 = REFLECTANCE_SCALE * filmic_gamma_inverse_batch(ti.math.mix(ti.Vector([0.0, 0.0, 0.0]), cube0, f0))
-    refl1 = REFLECTANCE_SCALE * filmic_gamma_inverse_batch(ti.math.mix(ti.Vector([0.0, 0.0, 0.0]), cube1, f1))
+    refl0 = REFLECTANCE_SCALE * filmic_gamma_inverse_batch(mix(np.zeros_like(cube0), cube0, f0))
+    refl1 = REFLECTANCE_SCALE * filmic_gamma_inverse_batch(mix(np.zeros_like(cube1), cube1, f1))
 
+    rds_batch = np.zeros((len(hit_locations), 6, 3), dtype=np.float32)
+    print("rds_batch", rds_batch.shape)
+    print("rds_batch 0", rds_batch[:, 0].shape)
+    a = refract_batch(ray_direction[hit_index_ray], bary_normals, iors0[0])
+    print("a", a.shape)
     rds_batch[:, 0] = refract_batch(ray_direction[hit_index_ray], bary_normals, iors0[0])
     rds_batch[:, 1] = refract_batch(ray_direction[hit_index_ray], bary_normals, iors0[1])
     rds_batch[:, 2] = refract_batch(ray_direction[hit_index_ray], bary_normals, iors0[2])
@@ -871,59 +881,12 @@ def render(hit_locations, hit_index_ray, hit_index_tri):
     col = resample_color_batch(rds_batch, refl0, refl1, wave0, wave1)
     col = contrast_batch(col)
     print("col", col.shape)
+    frame = np.zeros((1024 * 1024, 3), dtype=np.float32)
+    frame[hit_index_ray] = np.clip(col, 0.0, 1.0)
+    rgb8 = np.zeros((1024, 1024, 3), dtype=np.uint8)
+    rgb8[:] = (frame.reshape(1024, 1024, 3) * 255).astype(np.uint8)
+    imageio.imwrite("frame.png", rgb8)
 
-
-    # for i in range(len(hit_locations)):
-    #     n = mesh_normal[i].normalized()
-    #     view_dir = (camera_pos - x[i]).normalized()
-
-    #     sam = fancy_cube(n)
-    #     filmThickness = sam[0] + 0.1
-
-    #     att0 = 0.5 + 0.5 * ti.math.cos(((THICKNESS_SCAL * filmThickness) / (wave0 + 1.0)) * ti.math.dot(n, view_dir))
-    #     att1 = 0.5 + 0.5 * ti.math.cos(((THICKNESS_SCAL * filmThickness) / (wave1 + 1.0)) * ti.math.dot(n, view_dir))
-    #     # print("break 3")
-    #     rior0 = 1.0 / iors0
-    #     rior1 = 1.0 / iors1
-    #     t0 = ti.math.pow((1.0 - rior0)/(1.0 + rior0), ti.Vector([2.0, 2.0, 2.0]))
-    #     t1 = ti.math.pow((1.0 - rior1)/(1.0 + rior1), ti.Vector([2.0, 2.0, 2.0]))
-    #     tt = ti.math.pow(ti.math.clamp(1.0 + ti.math.dot(n, view_dir), 0.0, 1.0), 5.0)
-    #     f0 = (1.0 - FRESNEL_RATIO) + FRESNEL_RATIO * (t0 + (1.0 - t0) * tt)
-    #     f1 = (1.0 - FRESNEL_RATIO) + FRESNEL_RATIO * (t1 + (1.0 - t1) * tt)
-
-    #     rrd = view_dir - 2.0 * ti.math.dot(n, view_dir) * n
-
-    #     # print("break 4")
-    #     cube0 = REFLECTANCE_GAMMA_SCALE * att0 * simpleampleCubeMap(wave0, rrd)
-    #     cube1 = REFLECTANCE_GAMMA_SCALE * att1 * simpleampleCubeMap(wave1, rrd)
-
-    #     refl0 = REFLECTANCE_SCALE * filmic_gamma_inverse(ti.math.mix(ti.Vector([0.0, 0.0, 0.0]), cube0, f0))
-    #     refl1 = REFLECTANCE_SCALE * filmic_gamma_inverse(ti.math.mix(ti.Vector([0.0, 0.0, 0.0]), cube1, f1))
-    #     # print("break 5")
-
-    #     rds[0] = ti.math.refract(view_dir, n, iors0[0])
-    #     rds[1] = ti.math.refract(view_dir, n, iors0[1])
-    #     rds[2] = ti.math.refract(view_dir, n, iors0[2])
-    #     rds[3] = ti.math.refract(view_dir, n, iors1[0])
-    #     rds[4] = ti.math.refract(view_dir, n, iors1[1])
-    #     rds[5] = ti.math.refract(view_dir, n, iors1[2])
-
-    #     col = resample_color(rds, refl0, refl1, wave0, wave1)
-    #     col = contrast(col)
-
-        # cos_theta = ti.math.dot(n, view_dir)
-        # fresnel = ti.pow(1.0 - cos_theta, 5.0)
-        # wave = ti.sin(50 * cos_theta) * 0.5 + 0.5
-
-        # r = 0.5 * fresnel + 0.5 * wave
-        # g = 0.3 * fresnel + 0.7 * wave
-        # b = 1.0 * (1.0 - fresnel) * wave
-
-        # r = 1.0 / (1.0 - ti.math.exp( -0.8 * (r - 0.5)))
-        # g = 1.0 / (1.0 - ti.math.exp( -0.8 * (g - 0.5)))
-        # b = 1.0 / (1.0 - ti.math.exp( -0.8 * (b - 0.5)))
-
-        # colors[i] = col
 
 
 
