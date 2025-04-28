@@ -4,6 +4,7 @@ from math import sqrt
 from PIL import Image
 
 import imageio
+import trimesh
 
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
@@ -49,6 +50,7 @@ wave1 = ti.field(dtype=ti.f32, shape=3)
 # for camera movement
 angle = 0.0
 camera_radius = 8.0
+origin_point = ti.Vector.field(3, dtype=ti.f32, shape=1)
 
 # 数据结构
 x = ti.Vector.field(3, dtype=ti.f32, shape=n_points)  # 位置
@@ -176,13 +178,15 @@ def compute_forces():
 @ti.kernel
 def integrate():
     print(f[0])
+    origin_point[0] = ti.Vector([0.0, 0.0, 0.0])
     for i in range(n_points):
         a = f[i] / mass + gravity
         v[i] += dt * a
         x[i] += dt * v[i]
+        origin_point[0] += x[i]
+    origin_point[0] /= n_points
     
 def create_icosphere(subdiv=subdiv):
-    import trimesh
 
     mesh = trimesh.creation.icosphere(subdivisions=subdiv, radius=2.0)
     verts = mesh.vertices
@@ -448,20 +452,6 @@ test()
 
 init_speed(edges_np)
 
-# mesh_normal.from_numpy(np.array(mesh.vertex_normals[:n_points]))
-# print("origin mesh_normal", mesh_normal[0])
-# update(0)
-# update(0)
-
-# anim = FuncAnimation(fig, update, interval=dt*2000)
-# plt.show()
-
-window = ti.ui.Window("Bubble", res=(1024, 1024))
-canvas = window.get_canvas()
-# canvas.set_background_color((0.5, 0.5, 0.5))
-canvas.set_background_color((1.0, 1.0, 1.0))
-scene = ti.ui.Scene()
-camera = ti.ui.Camera()
 
 # bubble = ti.ui.Mesh(vertices=x, indices=face_indexs)
 
@@ -473,37 +463,38 @@ frames = []
 frame_count = 0
 total_frames = 60 * 30
 
-# while frame_count < total_frames:
-while window.running:
-    angle += 0.01
-    cam_x = camera_radius * ti.math.cos(angle)
-    cam_y = 0.0
-    cam_z = camera_radius * ti.math.sin(angle)
-    compute_volume_maintain_force()
-    compute_forces()
-    integrate()
-    mesh.vertices[:] = x.to_numpy()
-    mesh_normal.from_numpy(np.array(mesh.vertex_normals[:n_points]))
+
+compute_volume_maintain_force()
+compute_forces()
+integrate()
+mesh.vertices[:] = x.to_numpy()
+mesh_normal.from_numpy(np.array(mesh.vertex_normals[:n_points]))
+
+cam_x = camera_radius * ti.math.cos(angle) 
+cam_y = 0.0
+cam_z = camera_radius * ti.math.sin(angle)
+
+lookat_point = origin_point[0].to_numpy()
+camera_pos = np.array([cam_x, cam_y, cam_z]) + lookat_point
+width = 1024
+height = 1024
+
+import ray
+
+ray_origin, ray_direction = ray.generate_camera_rays(camera_pos, lookat_point, width, height)
+print(ray_origin.shape)
+print(ray_direction.shape)
+print(type(mesh.ray))
+print("hello")
+
+import pyembree
+print(pyembree)
+
+locations, index_ray, index_tri = mesh.ray.intersects_location(ray_origin, ray_direction, multiple_hits=False)
+
+print(locations.shape)
+print(index_ray.shape)
+print(index_tri.shape)
 
 
 
-    update_color(ti.Vector([cam_x, cam_y, cam_z]))
-    # print(colors[0])
-
-    scene.ambient_light((0.8, 0.8, 0.8))
-    scene.point_light(pos=(cam_x, cam_y, cam_z), color=(1.0, 1.0, 1.0))
-    camera.position(cam_x, cam_y, cam_z)
-    camera.lookat(0, 0, 0)
-    scene.set_camera(camera)
-    scene.mesh(x, indices=face_indexs_for_render, per_vertex_color=colors)
-    canvas.scene(scene)
-    window.show()
-    # img = window.get_image_buffer_as_numpy()
-    # img = (img * 255).astype(np.uint8)
-    # frames.append(img)
-    # frame_count += 1
-
-    # print("frame_count", frame_count)
-    # print("mesh_normal", mesh_normal[0])
-
-# imageio.mimsave('bubble.mp4', frames, fps=60)
