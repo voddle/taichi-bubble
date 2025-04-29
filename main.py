@@ -22,12 +22,12 @@ ti.init(arch=ti.cuda)  # or ti.gpu
 # subdive 7 ver 163842 face 327680 edge 491520 second_edge 983010
 
 
-# 模拟参数
-subdiv = 5
-n_points = 10242 # subdivision=2 的 icosphere 顶点数
-n_edges = 30720 # 对应的边数
-n_second_edges = 15330 # 对应的边数
-n_faces = 20480  # 对应的三角形面数
+
+subdiv = 3
+n_points = 642 
+n_edges = 1280 
+n_second_edges = 930 
+n_faces = 642  
 max_neighbor = 12
 
 dt = 0.01
@@ -35,7 +35,7 @@ k_spring = 50.0
 damping = 0.05
 mass = 0.5
 gravity = ti.Vector([0.0, -0.0, 0.0])
-rest_len = 0.1  # 默认弹簧长度（可从原始边长算）
+rest_len = 0.1  
 IOR = 0.9
 DISPERSION = 0.05
 THICKNESS_SCAL = 32.0
@@ -58,16 +58,15 @@ angle = 0.0
 camera_radius = 8.0
 origin_point = ti.Vector.field(3, dtype=ti.f32, shape=1)
 
-# 数据结构
-x = ti.Vector.field(3, dtype=ti.f32, shape=n_points)  # 位置
-v = ti.Vector.field(3, dtype=ti.f32, shape=n_points)  # 速度
-f = ti.Vector.field(3, dtype=ti.f32, shape=n_points)  # 力
-edges = ti.Vector.field(2, dtype=ti.i32, shape=n_edges)  # 每条边是两个点
-second_edges = ti.Vector.field(2, dtype=ti.i32, shape=n_second_edges)  # 每条边是两个点
-rest = ti.field(dtype=ti.f32, shape=n_edges)  # 弹簧的初始长度
-second_rest = ti.field(dtype=ti.f32, shape=n_second_edges)  # 弹簧的初始长度
-face_indexs = ti.Vector.field(3, dtype=ti.i32, shape=n_faces)  # 每个点所属的面
-face_indexs_for_render = ti.field(dtype=ti.i32, shape=n_faces * 3)  # 每个点所属的面
+x = ti.Vector.field(3, dtype=ti.f32, shape=n_points)  
+v = ti.Vector.field(3, dtype=ti.f32, shape=n_points)  
+f = ti.Vector.field(3, dtype=ti.f32, shape=n_points)  
+edges = ti.Vector.field(2, dtype=ti.i32, shape=n_edges)  
+second_edges = ti.Vector.field(2, dtype=ti.i32, shape=n_second_edges)  
+rest = ti.field(dtype=ti.f32, shape=n_edges)  
+second_rest = ti.field(dtype=ti.f32, shape=n_second_edges)  
+face_indexs = ti.Vector.field(3, dtype=ti.i32, shape=n_faces)  
+face_indexs_for_render = ti.field(dtype=ti.i32, shape=n_faces * 3)  
 colors = ti.Vector.field(3, dtype=ti.f32, shape=n_points)
 rds = ti.Vector.field(3, dtype=ti.f32, shape=6)
 ti_neighbor_map = ti.field(dtype=ti.i32, shape=(n_points, max_neighbor))
@@ -80,7 +79,7 @@ ti_texture.from_numpy(np.transpose(image_np, (1, 0, 2)))
 image_np = (np.transpose(image_np, (1,0,2)))
 
 image = Image.open("bw.jpg").convert("RGB")
-image_np_bw = np.array(image).astype(np.float32) / 255.0
+image_np_bw = np.array(image).astype(np.float32) * 0.5 / 255.0
 ti_texture_bw = ti.Vector.field(3, dtype=ti.f32, shape=(image_np_bw.shape[1], image_np_bw.shape[0]))
 ti_texture_bw.from_numpy(np.transpose(image_np, (1, 0, 2)))
 image_np_bw = (np.transpose(image_np_bw, (1,0,2)))
@@ -88,7 +87,7 @@ image_np_bw = (np.transpose(image_np_bw, (1,0,2)))
 
 particles = np.zeros(n_points, dtype=[("position", float , 3)])
 
-origin_edge = ti.Vector.field(2, dtype=ti.f32, shape=n_edges)  # 每条边是两个点
+origin_edge = ti.Vector.field(2, dtype=ti.f32, shape=n_edges)  
 origin_volume = ti.field(dtype=ti.f32, shape=1)
 volume = ti.field(dtype=ti.f32, shape=1)
 volume_force = ti.field(dtype=ti.f32, shape=1)
@@ -193,7 +192,7 @@ def integrate():
     origin_point[0] /= n_points
     
 def create_icosphere(subdiv=subdiv):
-    mesh = trimesh.creation.icosphere(subdivisions=subdiv, radius=2.0)
+    mesh = trimesh.creation.icosphere(subdivisions=subdiv, radius=4.0)
     verts = mesh.vertices
     edges_set = set()
     for face in mesh.faces:
@@ -263,8 +262,6 @@ def test():
 
 
 def compute_barycentric(v0, v1, v2, p):
-    # v0, v1, v2: 顶点坐标
-    # p: hit点坐标
     v0v1 = v1 - v0
     v0v2 = v2 - v0
     v0p = p - v0
@@ -291,9 +288,6 @@ init_speed(edges_np)
 
 
 import ray
-
-
-
 
 
 
@@ -330,25 +324,23 @@ def fancy_cube_batch(n):
 
     eps = 1e-6
 
-    # Prepare uv for each channel
-    # colx: (n[1]/n[0], n[2]/n[0])
     mask_x = np.abs(n0) > eps
     uvx_0 = 0.5 + THICKNESS_CUBEMAP_SCALE * (n1 / (n0 + (~mask_x) * eps))
     uvx_1 = 0.5 + THICKNESS_CUBEMAP_SCALE * (n2 / (n0 + (~mask_x) * eps))
 
-    # coly: (n[2]/n[1], n[0]/n[1])
+    
     mask_y = np.abs(n1) > eps
     uvy_0 = 0.5 + THICKNESS_CUBEMAP_SCALE * (n2 / (n1 + (~mask_y) * eps))
     uvy_1 = 0.5 + THICKNESS_CUBEMAP_SCALE * (n0 / (n1 + (~mask_y) * eps))
 
-    # colz: (n[0]/n[2], n[1]/n[2])
+    
     mask_z = np.abs(n2) > eps
     uvz_0 = 0.5 + THICKNESS_CUBEMAP_SCALE * (n0 / (n2 + (~mask_z) * eps))
     uvz_1 = 0.5 + THICKNESS_CUBEMAP_SCALE * (n1 / (n2 + (~mask_z) * eps))
 
     H, W, _ = image_np.shape
 
-    # Clip UV到合法区间，防止越界
+    
     uvx_0 = np.clip((uvx_0 * (W-1)).astype(np.int32), 0, W-1)
     uvx_1 = np.clip((uvx_1 * (H-1)).astype(np.int32), 0, H-1)
 
@@ -358,7 +350,6 @@ def fancy_cube_batch(n):
     uvz_0 = np.clip((uvz_0 * (W-1)).astype(np.int32), 0, W-1)
     uvz_1 = np.clip((uvz_1 * (H-1)).astype(np.int32), 0, H-1)
 
-    # Sample color
     colx = np.zeros((N, 3), dtype=np.float32)
     coly = np.zeros((N, 3), dtype=np.float32)
     colz = np.zeros((N, 3), dtype=np.float32)
@@ -367,7 +358,6 @@ def fancy_cube_batch(n):
     coly[mask_y] = image_np[uvy_1[mask_y], uvy_0[mask_y]]
     colz[mask_z] = image_np[uvz_1[mask_z], uvz_0[mask_z]]
 
-    # Weighted sum
     numerator = colx * t[:, 0:1] + coly * t[:, 1:2] + colz * t[:, 2:3]
     denominator = (mask_x[:, None] * t[:, 0:1] + mask_y[:, None] * t[:, 1:2] + mask_z[:, None] * t[:, 2:3]) + eps
 
@@ -405,36 +395,36 @@ def texture_3d_load_batch(view_dirs):
     x_neg_mask = mask_x_major & ~x_pos
     
     if np.any(x_pos_mask):
-        uvs[x_pos_mask, 0] = 0.5 - 0.5 * view_dirs[x_pos_mask, 2] / abs_d[x_pos_mask, 0]  # -z/x
-        uvs[x_pos_mask, 1] = 0.5 - 0.5 * view_dirs[x_pos_mask, 1] / abs_d[x_pos_mask, 0]  # -y/x
+        uvs[x_pos_mask, 0] = 0.5 - 0.5 * view_dirs[x_pos_mask, 2] / abs_d[x_pos_mask, 0]  
+        uvs[x_pos_mask, 1] = 0.5 - 0.5 * view_dirs[x_pos_mask, 1] / abs_d[x_pos_mask, 0]  
     
     if np.any(x_neg_mask):
-        uvs[x_neg_mask, 0] = 0.5 + 0.5 * view_dirs[x_neg_mask, 2] / abs_d[x_neg_mask, 0]  # z/x
-        uvs[x_neg_mask, 1] = 0.5 - 0.5 * view_dirs[x_neg_mask, 1] / abs_d[x_neg_mask, 0]  # -y/x
+        uvs[x_neg_mask, 0] = 0.5 + 0.5 * view_dirs[x_neg_mask, 2] / abs_d[x_neg_mask, 0]  
+        uvs[x_neg_mask, 1] = 0.5 - 0.5 * view_dirs[x_neg_mask, 1] / abs_d[x_neg_mask, 0]  
     
     y_pos = view_dirs[:, 1] > 0
     y_pos_mask = mask_y_major & y_pos
     y_neg_mask = mask_y_major & ~y_pos
     
     if np.any(y_pos_mask):
-        uvs[y_pos_mask, 0] = 0.5 - 0.5 * view_dirs[y_pos_mask, 0] / abs_d[y_pos_mask, 1]  # -x/y
-        uvs[y_pos_mask, 1] = 0.5 + 0.5 * view_dirs[y_pos_mask, 2] / abs_d[y_pos_mask, 1]  # z/y
+        uvs[y_pos_mask, 0] = 0.5 - 0.5 * view_dirs[y_pos_mask, 0] / abs_d[y_pos_mask, 1]  
+        uvs[y_pos_mask, 1] = 0.5 + 0.5 * view_dirs[y_pos_mask, 2] / abs_d[y_pos_mask, 1]  
     
     if np.any(y_neg_mask):
-        uvs[y_neg_mask, 0] = 0.5 + 0.5 * view_dirs[y_neg_mask, 0] / abs_d[y_neg_mask, 1]  # x/y
-        uvs[y_neg_mask, 1] = 0.5 - 0.5 * view_dirs[y_neg_mask, 2] / abs_d[y_neg_mask, 1]  # -z/y
+        uvs[y_neg_mask, 0] = 0.5 + 0.5 * view_dirs[y_neg_mask, 0] / abs_d[y_neg_mask, 1]  
+        uvs[y_neg_mask, 1] = 0.5 - 0.5 * view_dirs[y_neg_mask, 2] / abs_d[y_neg_mask, 1]  
     
     z_pos = view_dirs[:, 2] > 0
     z_pos_mask = mask_z_major & z_pos
     z_neg_mask = mask_z_major & ~z_pos
     
     if np.any(z_pos_mask):
-        uvs[z_pos_mask, 0] = 0.5 + 0.5 * view_dirs[z_pos_mask, 0] / abs_d[z_pos_mask, 2]  # x/z
-        uvs[z_pos_mask, 1] = 0.5 - 0.5 * view_dirs[z_pos_mask, 1] / abs_d[z_pos_mask, 2]  # -y/z
+        uvs[z_pos_mask, 0] = 0.5 + 0.5 * view_dirs[z_pos_mask, 0] / abs_d[z_pos_mask, 2]  
+        uvs[z_pos_mask, 1] = 0.5 - 0.5 * view_dirs[z_pos_mask, 1] / abs_d[z_pos_mask, 2]  
     
     if np.any(z_neg_mask):
-        uvs[z_neg_mask, 0] = 0.5 - 0.5 * view_dirs[z_neg_mask, 0] / abs_d[z_neg_mask, 2]  # -x/z
-        uvs[z_neg_mask, 1] = 0.5 - 0.5 * view_dirs[z_neg_mask, 1] / abs_d[z_neg_mask, 2]  # -y/z
+        uvs[z_neg_mask, 0] = 0.5 - 0.5 * view_dirs[z_neg_mask, 0] / abs_d[z_neg_mask, 2]  
+        uvs[z_neg_mask, 1] = 0.5 - 0.5 * view_dirs[z_neg_mask, 1] / abs_d[z_neg_mask, 2]  
     
     H, W, _ = image_np_bw.shape
     u_indices = np.clip((uvs[:, 0] * (W - 1)).astype(np.int32), 0, W - 1)
@@ -488,8 +478,8 @@ def filmic_gamma_inverse_batch(y):
     return (1.0 / GAMMA_CURVE) * (np.exp(GAMMA_SCALE * y) - 1.0)
 
 def refract_batch(incident, normal, eta):
-    incident = np.asarray(incident, dtype=np.float32)  # (N,3)
-    normal   = np.asarray(normal,   dtype=np.float32)  # (N,3)
+    incident = np.asarray(incident, dtype=np.float32)  
+    normal   = np.asarray(normal,   dtype=np.float32)  
     eta = np.asarray(eta, dtype=np.float32)
     eta = np.broadcast_to(eta, (incident.shape[0], 1))
 
@@ -506,7 +496,7 @@ def refract_batch(incident, normal, eta):
     sqrt_k = np.sqrt(np.clip(k, 0.0, None))   
     T = η * I - (η * cos_i + sqrt_k) * N                 
 
-    T[~k_pos.squeeze(), :] = np.zeros_like(T[~k_pos.squeeze(), :]) # 或者返回 NaN / 保留原向量，视需求而定
+    T[~k_pos.squeeze(), :] = np.zeros_like(T[~k_pos.squeeze(), :]) 
 
     return T
 
@@ -515,7 +505,7 @@ def sample_weights_batch(i):
     w0 = (1.0 - i)**2
     w1 = 2.8 * i * (1.0 - i)
     w2 = i**2
-    return np.stack([w0, w1, w2], axis=-1)  # (..., 3)
+    return np.stack([w0, w1, w2], axis=-1)  
 
 def resample_batch(wl0, wl1, i0, i1):
     wl0 = np.asarray(wl0, dtype=np.float32)
@@ -537,7 +527,7 @@ def resample_batch(wl0, wl1, i0, i1):
            i1[..., 1, None] * w4 +
            i1[..., 2, None] * w5)
 
-    return out  # (..., 3)
+    return out  
 
 
 def resample_color_batch(rds_batch, refl0, refl1, wave0, wave1):
@@ -545,15 +535,17 @@ def resample_color_batch(rds_batch, refl0, refl1, wave0, wave1):
         intensity0 = refl0
         intensity1 = refl1
     else:
+        rds_batch *= 3
         cube0 = sampleCubeMap_batch(wave0, rds_batch[:, 0], rds_batch[:, 1], rds_batch[:, 2])
         cube1 = sampleCubeMap_batch(wave1, rds_batch[:, 3], rds_batch[:, 4], rds_batch[:, 5])
 
-        fg0 = filmic_gamma_inverse_batch(cube0)
-        fg1 = filmic_gamma_inverse_batch(cube1)
+        fg0 = filmic_gamma_inverse_batch(cube0) * 0.8
+        fg1 = filmic_gamma_inverse_batch(cube1) * 0.8
 
-        intensity0 = filmic_gamma_inverse_batch(cube0) + refl0
-        intensity1 = filmic_gamma_inverse_batch(cube1) + refl1
-
+        
+        
+        intensity0 = fg0 + refl0 * 0.8
+        intensity1 = fg1 + refl1 * 0.8
     col = resample_batch(wave0, wave1, intensity0, intensity1)
 
     re = 1.4 * filmic_gamma_batch(col / 6.0)
@@ -567,14 +559,15 @@ def contrast_batch(x):
 def mix(a, b, t):
     return a * (1.0 - t) + b * t
 
+center = np.array([-1.0, 0.0, 0.0], dtype=np.float32).reshape(1, 1, 3)
+
 
 def render(hit_locations, hit_index_ray, hit_index_tri):
     wave0 = np.array([1.0, 0.8, 0.6])
     wave1 = np.array([0.4, 0.2, 0.0])
-
+    
     iors0 = IOR + wave0 * DISPERSION
     iors1 = IOR + wave1 * DISPERSION
-
 
     face_indices = mesh.faces[hit_index_tri]  
 
@@ -600,16 +593,11 @@ def render(hit_locations, hit_index_ray, hit_index_tri):
     att0 = 0.5 + 0.5 * np.cos(((THICKNESS_SCAL * filmThickness) / (wave0 + 1.0)) * dot_products)
     att1 = 0.5 + 0.5 * np.cos(((THICKNESS_SCAL * filmThickness) / (wave1 + 1.0)) * dot_products)
 
-
-
-
     rior0 = 1.0 / iors0
     rior1 = 1.0 / iors1
 
-
     f0 = (1.0 - FRESNEL_RATIO) + FRESNEL_RATIO * fresnel_batch_lazy(dot_products, rior0)
     f1 = (1.0 - FRESNEL_RATIO) + FRESNEL_RATIO * fresnel_batch_lazy(dot_products, rior1)
-
 
 
     rrd = ray_direction[hit_index_ray] - 2.0 * dot_products * bary_normals
@@ -618,8 +606,8 @@ def render(hit_locations, hit_index_ray, hit_index_tri):
     cube0 = REFLECTANCE_GAMMA_SCALE * att0 * simplesampleCubeMap_batch(wave0, rrd)
     cube1 = REFLECTANCE_GAMMA_SCALE * att1 * simplesampleCubeMap_batch(wave1, rrd)
 
-    refl0 = REFLECTANCE_SCALE * filmic_gamma_inverse_batch(mix(np.zeros_like(cube0), np.zeros_like(cube0), f0))
-    refl1 = REFLECTANCE_SCALE * filmic_gamma_inverse_batch(mix(np.zeros_like(cube1), np.zeros_like(cube1), f1))
+    refl0 = REFLECTANCE_SCALE * filmic_gamma_inverse_batch(mix(np.zeros_like(cube0), cube0, f0))
+    refl1 = REFLECTANCE_SCALE * filmic_gamma_inverse_batch(mix(np.zeros_like(cube1), cube1, f1))
 
     rds_batch = np.zeros((len(hit_locations), 6, 3), dtype=np.float32)
 
@@ -633,6 +621,9 @@ def render(hit_locations, hit_index_ray, hit_index_tri):
     probe0 = 12200
     probe1 = 213482
     probe2 = 2010
+
+    delta = rds_batch - center
+    rds_batch =  center + 5 * delta
     col = resample_color_batch(rds_batch, refl0, refl1, wave0, wave1)
 
     col = contrast_batch(col)
@@ -653,58 +644,61 @@ mesh_normal.from_numpy(np.array(mesh.vertex_normals[:n_points]))
 
 frames = []
 frame_count = 0
-total_frames = 30 * 10
+total_frames = 30 * 30
 
-compute_volume_maintain_force()
-compute_forces()
-integrate()
-mesh.vertices[:] = x.to_numpy()
-mesh_normal.from_numpy(np.array(mesh.vertex_normals[:n_points]))
+# compute_volume_maintain_force()
+# compute_forces()
+# integrate()
+# mesh.vertices[:] = x.to_numpy()
+# mesh_normal.from_numpy(np.array(mesh.vertex_normals[:n_points]))
 
-cam_x = camera_radius * ti.math.cos(angle) 
-cam_y = 0.0
-cam_z = camera_radius * ti.math.sin(angle)
+# cam_x = camera_radius * ti.math.cos(angle) 
+# cam_y = 0.0
+# cam_z = camera_radius * ti.math.sin(angle)
 
-cam_x = 8.0
-cam_y = 0.0
-cam_z = 2.0
+# cam_x = 15.0
+# cam_y = 0.0
+# cam_z = 0.0
 
 
-lookat_point = origin_point[0].to_numpy()
-camera_pos = np.array([cam_x, cam_y, cam_z]) + lookat_point
+# lookat_point = origin_point[0].to_numpy()
+# camera_pos = np.array([cam_x, cam_y, cam_z]) + lookat_point
 
-ray_origin, ray_direction = ray.generate_camera_rays(camera_pos, lookat_point, width, height)
-locations, index_ray, index_tri = mesh.ray.intersects_location(ray_origin, ray_direction, multiple_hits=False)
-frame = render(locations, index_ray, index_tri)
-imageio.imwrite("test.png", frame)
+# ray_origin, ray_direction = ray.generate_camera_rays(camera_pos, lookat_point, width, height)
+# locations, index_ray, index_tri = mesh.ray.intersects_location(ray_origin, ray_direction, multiple_hits=False)
+# frame = render(locations, index_ray, index_tri)
+# imageio.imwrite("test.png", frame)
 # ------------------------------------------------------------
 # compute_volume_maintain_force()
 # compute_forces()
 # integrate()
-# for i in range(total_frames):
-#     angle += 0.02
-#     # compute_volume_maintain_force()
-#     # compute_forces()
-#     # integrate()
-#     mesh.vertices[:] = x.to_numpy()
-#     mesh_normal.from_numpy(np.array(mesh.vertex_normals[:n_points]))
+for i in range(total_frames):
+    angle += 0.0
+    compute_volume_maintain_force()
+    compute_forces()
+    integrate()
+    mesh.vertices[:] = x.to_numpy()
+    mesh_normal.from_numpy(np.array(mesh.vertex_normals[:n_points]))
 
-#     cam_x = camera_radius * ti.math.cos(angle) 
-#     cam_y = 0.0
-#     cam_z = camera_radius * ti.math.sin(angle)
+    # cam_x = camera_radius * ti.math.cos(angle) 
+    # cam_y = 0.0
+    # cam_z = camera_radius * ti.math.sin(angle)
+    cam_x = 15.0
+    cam_y = 0.0
+    cam_z = 0.0
 
-#     lookat_point = origin_point[0].to_numpy()
-#     camera_pos = np.array([cam_x, cam_y, cam_z]) + lookat_point
-#     width = 1024
-#     height = 1024
+    lookat_point = origin_point[0].to_numpy()
+    camera_pos = np.array([cam_x, cam_y, cam_z]) + lookat_point
+    width = 1024
+    height = 1024
 
-#     ray_origin, ray_direction = ray.generate_camera_rays(camera_pos, lookat_point, width, height)
-#     locations, index_ray, index_tri = mesh.ray.intersects_location(ray_origin, ray_direction, multiple_hits=False)
-#     frame = render(locations, index_ray, index_tri)
-#     frames.append(frame)
-#     print(f"Processing frame {i+1} of {total_frames}")
+    ray_origin, ray_direction = ray.generate_camera_rays(camera_pos, lookat_point, width, height)
+    locations, index_ray, index_tri = mesh.ray.intersects_location(ray_origin, ray_direction, multiple_hits=False)
+    frame = render(locations, index_ray, index_tri)
+    frames.append(frame)
+    print(f"Processing frame {i+1} of {total_frames}")
 
-# imageio.mimsave("test.mp4", frames, fps=30)
+imageio.mimsave("test.mp4", frames, fps=30)
 
 
 
