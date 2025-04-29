@@ -117,6 +117,13 @@ def init_speed(edges):
     
     v.from_numpy(tmp_v)
 
+@ti.kernel
+def init_rest():
+    for i in range(n_edges):
+        rest[i] = (x[edges[i][0]] - x[edges[i][1]]).norm()
+    for i in range(n_second_edges):
+        second_rest[i] = (x[second_edges[i][0]] - x[second_edges[i][1]]).norm()
+
 
 # volume maintain force
 @ti.kernel
@@ -445,6 +452,7 @@ def texCubeSampleWeights_batch(i):
     return w / np.sum(w)
 
 def simplesampleCubeMap_batch(w, rrd):
+    t = texture_3d_load_batch(rrd)
     
     weights0 = texCubeSampleWeights_batch(w[0])  
     weights1 = texCubeSampleWeights_batch(w[1])  
@@ -572,6 +580,7 @@ def render(hit_locations, hit_index_ray, hit_index_tri):
 
     v0s = mesh.vertices[face_indices[:, 0]]  
     v1s = mesh.vertices[face_indices[:, 1]] 
+    v2s = mesh.vertices[face_indices[:, 2]]
 
     n0s = mesh.vertex_normals[face_indices[:, 0]]  
     n1s = mesh.vertex_normals[face_indices[:, 1]]
@@ -646,56 +655,56 @@ frames = []
 frame_count = 0
 total_frames = 30 * 10
 
-# compute_volume_maintain_force()
-# compute_forces()
-# integrate()
-# mesh.vertices[:] = x.to_numpy()
-# mesh_normal.from_numpy(np.array(mesh.vertex_normals[:n_points]))
-
-# cam_x = camera_radius * ti.math.cos(angle) 
-# cam_y = 0.0
-# cam_z = camera_radius * ti.math.sin(angle)
-
-# cam_x = 8.0
-# cam_y = 0.0
-# cam_z = 2.0
-
-
-# lookat_point = origin_point[0].to_numpy()
-# camera_pos = np.array([cam_x, cam_y, cam_z]) + lookat_point
-
-# ray_origin, ray_direction = ray.generate_camera_rays(camera_pos, lookat_point, width, height)
-# locations, index_ray, index_tri = mesh.ray.intersects_location(ray_origin, ray_direction, multiple_hits=False)
-# frame = render(locations, index_ray, index_tri)
-# imageio.imwrite("test.png", frame)
-# ------------------------------------------------------------
 compute_volume_maintain_force()
 compute_forces()
 integrate()
-for i in range(total_frames):
-    angle += 0.02
-    # compute_volume_maintain_force()
-    # compute_forces()
-    # integrate()
-    mesh.vertices[:] = x.to_numpy()
-    mesh_normal.from_numpy(np.array(mesh.vertex_normals[:n_points]))
+mesh.vertices[:] = x.to_numpy()
+mesh_normal.from_numpy(np.array(mesh.vertex_normals[:n_points]))
 
-    cam_x = camera_radius * ti.math.cos(angle) 
-    cam_y = 0.0
-    cam_z = camera_radius * ti.math.sin(angle)
+cam_x = camera_radius * ti.math.cos(angle) 
+cam_y = 0.0
+cam_z = camera_radius * ti.math.sin(angle)
 
-    lookat_point = origin_point[0].to_numpy()
-    camera_pos = np.array([cam_x, cam_y, cam_z]) + lookat_point
-    width = 1024
-    height = 1024
+cam_x = 8.0
+cam_y = 0.0
+cam_z = 2.0
 
-    ray_origin, ray_direction = ray.generate_camera_rays(camera_pos, lookat_point, width, height)
-    locations, index_ray, index_tri = mesh.ray.intersects_location(ray_origin, ray_direction, multiple_hits=False)
-    frame = render(locations, index_ray, index_tri)
-    frames.append(frame)
-    print(f"Processing frame {i+1} of {total_frames}")
 
-imageio.mimsave("test.mp4", frames, fps=30)
+lookat_point = origin_point[0].to_numpy()
+camera_pos = np.array([cam_x, cam_y, cam_z]) + lookat_point
+
+ray_origin, ray_direction = ray.generate_camera_rays(camera_pos, lookat_point, width, height)
+locations, index_ray, index_tri = mesh.ray.intersects_location(ray_origin, ray_direction, multiple_hits=False)
+frame = render(locations, index_ray, index_tri)
+imageio.imwrite("test.png", frame)
+# ------------------------------------------------------------
+# compute_volume_maintain_force()
+# compute_forces()
+# integrate()
+# for i in range(total_frames):
+#     angle += 0.02
+#     # compute_volume_maintain_force()
+#     # compute_forces()
+#     # integrate()
+#     mesh.vertices[:] = x.to_numpy()
+#     mesh_normal.from_numpy(np.array(mesh.vertex_normals[:n_points]))
+
+#     cam_x = camera_radius * ti.math.cos(angle) 
+#     cam_y = 0.0
+#     cam_z = camera_radius * ti.math.sin(angle)
+
+#     lookat_point = origin_point[0].to_numpy()
+#     camera_pos = np.array([cam_x, cam_y, cam_z]) + lookat_point
+#     width = 1024
+#     height = 1024
+
+#     ray_origin, ray_direction = ray.generate_camera_rays(camera_pos, lookat_point, width, height)
+#     locations, index_ray, index_tri = mesh.ray.intersects_location(ray_origin, ray_direction, multiple_hits=False)
+#     frame = render(locations, index_ray, index_tri)
+#     frames.append(frame)
+#     print(f"Processing frame {i+1} of {total_frames}")
+
+# imageio.mimsave("test.mp4", frames, fps=30)
 
 
 
